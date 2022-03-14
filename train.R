@@ -15,7 +15,7 @@ for (i in seq_len(length(train_labels))) {
   training_set[[i]]$output <- output
 }
 
-model <- mlp(c(784, 16, 10), seed = 1337)
+model <- mlp(c(784, 16, 16, 10), seed = 1337)
 
 trained_model <- train(model,
                        training_set,

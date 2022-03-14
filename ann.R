@@ -67,7 +67,7 @@ del_cost <- function(model, training_set) {
         d[[l]] <- sig(a[[l]], T) * crossprod(w[[l + 1]][, -1], d[[l + 1]])
         gr[[l + 1]] <- tcrossprod(d[[l + 1]], c(1, z[[l]]))
       }
-      gr[[1]] <- tcrossprod(d[[l + 1]], c(1, x$input))
+      gr[[1]] <- tcrossprod(d[[l]], c(1, x$input))
       unlist(sapply(gr, as.vector))
     },
     w = model$weights,
@@ -102,7 +102,7 @@ train <- function(model, training_set, control = list()) {
                },
                model = model,
                data = training_set,
-               method = "BFGS",
+               method = "CG",
                control = control)
   model <- vec2model(opt$par, model)
   model$opt <- opt
