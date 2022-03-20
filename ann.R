@@ -62,7 +62,7 @@ del_cost <- function(model, training_set) {
       }
       d <- list()
       gr <- list()
-      d[[length(w)]] <- z[[length(w)]] - x$output
+      d[[length(w)]] <- sig(a[[length(w)]], T) * (z[[length(w)]] - x$output)
       for (l in seq(length(w) - 1, 1)) {
         d[[l]] <- sig(a[[l]], T) * crossprod(w[[l + 1]][, -1], d[[l + 1]])
         gr[[l + 1]] <- tcrossprod(d[[l + 1]], c(1, z[[l]]))
@@ -73,6 +73,27 @@ del_cost <- function(model, training_set) {
     w = model$weights,
     sig = sigmoid_fn(model$sigmoid))
   apply(simplify2array(samples), 1, mean)
+}
+
+gradient_check <- function(model, x, eps = 1e-5) {
+  grn <- rep(NA, sum(sapply(model$weights, function(x) prod(dim(x)))))
+  index_base <- 0
+  for (l in seq_len(length(model$weights))) {
+    for (i in seq_len(prod(dim(model$weights[[l]])))) {
+      print(i)
+      m_pos <- model
+      m_neg <- model
+      m_pos$weights[[l]][i] <- model$weights[[l]][i] + eps
+      m_neg$weights[[l]][i] <- model$weights[[l]][i] - eps
+      y <- (cost(m_pos, x) - cost(m_neg, x)) / (2 * eps)
+      grn[index_base   + i] <- y
+    }
+    index_base <- index_base + i
+  }
+  gra <- del_cost(model, x)
+  diff <- norm(gra - grn, type = "2") /
+    max(norm(gra, type = "2"), norm(grn, type = "2"))
+  return(diff)
 }
 
 model2vec <- function(model) {
@@ -102,9 +123,28 @@ train <- function(model, training_set, control = list()) {
                },
                model = model,
                data = training_set,
-               method = "CG",
+               method = "BFGS",
                control = control)
   model <- vec2model(opt$par, model)
   model$opt <- opt
   return(model)
+}
+
+test <- function(model, test_set) {
+  samples <- sapply(test_set,
+    function(x, w, sig) {
+      a <- list()
+      z <- list()
+      a[[1]] <- w[[1]] %*% c(1, x$input)
+      z[[1]] <- sig(a[[1]])
+      for (l in seq(2, length(w))) {
+        a[[l]] <- w[[l]] %*% c(1, z[[l - 1]])
+        z[[l]] <- sig(a[[l]])
+      }
+      x$prediction <- z[[length(w)]]
+      return(x)
+    },
+    w = model$weights,
+    sig = sigmoid_fn(model$sigmoid))
+  return(samples)
 }
