@@ -1,77 +1,93 @@
-sigmoid_fn <- function(fn = "relu") {
-  switch(fn,
-         "logistic" = function(x, derivative = FALSE) {
-           if (!derivative) {
-             1 / (1 + exp(-x))
-           } else {
-             y <- exp(-x) / (1 + exp(-x))^2
-             ifelse(is.nan(y), 0, y)
-           }
-         },
-         "relu" = function(x, derivative = FALSE) {
-           if (!derivative) {
-             ifelse(x > 0, x, 0)
-           } else {
-             ifelse(x > 0, 1, 0)
-           }
-         })
+act_fn <- function(fns = "relu") {
+  lapply(as.list(fns), function(fn) {
+          switch(fn,
+                 "logistic" = function(x, k, derivative = FALSE) {
+                   if (!derivative) {
+                     1 / (1 + exp(-x))
+                   } else {
+                     y <- exp(-x) / (1 + exp(-x))^2
+                     ifelse(is.nan(y), 0, y)
+                   }
+                 },
+                 "relu" = function(x, k, derivative = FALSE) {
+                   if (!derivative) {
+                     ifelse(x > 0, x, 0)
+                   } else {
+                     ifelse(x > 0, 1, 0)
+                   }
+                 },
+                 "softmax" = function(x, k, derivative = FALSE) {
+                   if (!derivative) {
+                     exp(x) / sum(exp(x))
+                   } else {
+                     y <- exp(x) / sum(exp(x))
+                     y * (1 - y)
+                   }
+                 })
+        })
 }
 
-mlp <- function(n, sigmoid = "relu", seed = NULL) {
+mlp <- function(n, activation = "relu", seed = NULL) {
   w <- list()
   if (!is.null(seed)) set.seed(seed)
   for (l in seq_len(length(n) - 1)) {
-    w[[l]] <- matrix(rnorm(n[l + 1] * (n[l] + 1), 0, 0.1),
+    w[[l]] <- matrix(rnorm(n[l + 1] * (n[l] + 1), 0, n[l + 1]^-0.5),
                      nrow = n[l + 1],
                      ncol = n[l] + 1)
   }
+  if (length(activation) != length(n) - 1)
+    act <- rep(act_fn(activation[1]), length(n) - 1)
+  else
+    act <- act_fn(activation)
   model <- list()
-  model$sigmoid <- sigmoid
+  model$activations <- act
   model$weights <- w
   return(model)
 }
 
 cost <- function(model, training_set) {
   samples <- sapply(training_set,
-    function(x, w, sig) {
+    function(x, w, h) {
+      L <- length(w)
       a <- list()
       z <- list()
       a[[1]] <- w[[1]] %*% c(1, x$input)
-      z[[1]] <- sig(a[[1]])
-      for (l in seq(2, length(w))) {
+      z[[1]] <- h[[1]](a[[1]])
+      for (l in seq(2, L)) {
         a[[l]] <- w[[l]] %*% c(1, z[[l - 1]])
-        z[[l]] <- sig(a[[l]])
+        z[[l]] <- h[[l]](a[[l]])
       }
-      sum(0.5 * (x$output - z[[length(w)]])^2)
+      sum(0.5 * (x$output - z[[L]])^2)
     },
     w = model$weights,
-    sig = sigmoid_fn(model$sigmoid))
+    h = model$activations)
   return(mean(samples))
 }
 
 del_cost <- function(model, training_set) {
   samples <- sapply(training_set,
-    function(x, w, sig) {
+    function(x, w, h) {
+      L <- length(w)
       a <- list()
       z <- list()
       a[[1]] <- w[[1]] %*% c(1, x$input)
-      z[[1]] <- sig(a[[1]])
-      for (l in seq(2, length(w))) {
+      z[[1]] <- h[[1]](a[[1]])
+      for (l in seq(2, L)) {
         a[[l]] <- w[[l]] %*% c(1, z[[l - 1]])
-        z[[l]] <- sig(a[[l]])
+        z[[l]] <- h[[l]](a[[l]])
       }
       d <- list()
       gr <- list()
-      d[[length(w)]] <- sig(a[[length(w)]], T) * (z[[length(w)]] - x$output)
-      for (l in seq(length(w) - 1, 1)) {
-        d[[l]] <- sig(a[[l]], T) * crossprod(w[[l + 1]][, -1], d[[l + 1]])
+      d[[L]] <- h[[L]](a[[L]], T) * (z[[L]] - x$output)
+      for (l in seq(L - 1, 1)) {
+        d[[l]] <- h[[l]](a[[l]], T) * crossprod(w[[l + 1]][, -1], d[[l + 1]])
         gr[[l + 1]] <- tcrossprod(d[[l + 1]], c(1, z[[l]]))
       }
       gr[[1]] <- tcrossprod(d[[l]], c(1, x$input))
       unlist(sapply(gr, as.vector))
     },
     w = model$weights,
-    sig = sigmoid_fn(model$sigmoid))
+    h = model$activations)
   apply(simplify2array(samples), 1, mean)
 }
 
@@ -113,7 +129,7 @@ vec2model <- function(params_vec, model) {
   return(model)
 }
 
-train <- function(model, training_set, control = list()) {
+train_opt <- function(model, training_set, method = "CG", control = list()) {
   opt <- optim(par = model2vec(model),
                fn = function(params_vec, model, data) {
                  cost(vec2model(params_vec, model), data)
@@ -123,28 +139,53 @@ train <- function(model, training_set, control = list()) {
                },
                model = model,
                data = training_set,
-               method = "BFGS",
+               method = method,
                control = control)
   model <- vec2model(opt$par, model)
   model$opt <- opt
   return(model)
 }
 
+train_sgd <- function(model, training_set, batch_size) {
+  n <- seq_len(length(training_set))
+  params <- model2vec(model)
+  loss <- 1
+  tol <- 1
+  m <- 2
+  nu <- 0.05 * c(1 * rep(sqrt(784), 785 * 16),
+                 4 * rep(sqrt(16), 17 * 16),
+                 6 * rep(sqrt(16), 17 * 10))
+  while (loss > 1e-2 && tol > 1e-4) {
+    model <- vec2model(params, model)
+    data <- training_set[sample(n, batch_size), drop = FALSE]
+    prev_params <- params
+    params <- params - del_cost(model, data)
+     + 0.0 * (params - prev_params)
+    print(loss <- cost(model, data))
+    tol <- norm(params - prev_params, type = "2") /
+      max(norm(params, type = "2"), norm(prev_params, type = "2"))
+    m <- m + 1
+    if (batch_size < length(training_set))
+      batch_size <- batch_size + 1
+  }
+  return(model)
+}
+
 test <- function(model, test_set) {
   samples <- sapply(test_set,
-    function(x, w, sig) {
+    function(x, w, h) {
+      L <- length(w)
       a <- list()
       z <- list()
       a[[1]] <- w[[1]] %*% c(1, x$input)
-      z[[1]] <- sig(a[[1]])
-      for (l in seq(2, length(w))) {
+      z[[1]] <- h[[1]](a[[1]])
+      for (l in seq(2, L)) {
         a[[l]] <- w[[l]] %*% c(1, z[[l - 1]])
-        z[[l]] <- sig(a[[l]])
+        z[[l]] <- h[[l]](a[[l]])
       }
-      x$prediction <- z[[length(w)]]
-      return(x)
+      return(z[[L]])
     },
     w = model$weights,
-    sig = sigmoid_fn(model$sigmoid))
+    h = model$activations)
   return(samples)
 }
