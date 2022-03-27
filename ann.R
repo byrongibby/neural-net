@@ -1,7 +1,7 @@
 act_fn <- function(fns = "relu") {
   lapply(as.list(fns), function(fn) {
           switch(fn,
-                 "logistic" = function(x, k, derivative = FALSE) {
+                 "logistic" = function(x, derivative = FALSE) {
                    if (!derivative) {
                      1 / (1 + exp(-x))
                    } else {
@@ -9,19 +9,26 @@ act_fn <- function(fns = "relu") {
                      ifelse(is.nan(y), 0, y)
                    }
                  },
-                 "relu" = function(x, k, derivative = FALSE) {
+                 "relu" = function(x, derivative = FALSE) {
                    if (!derivative) {
                      ifelse(x > 0, x, 0)
                    } else {
                      ifelse(x > 0, 1, 0)
                    }
                  },
-                 "softmax" = function(x, k, derivative = FALSE) {
+                 "softmax" = function(x, derivative = FALSE) {
                    if (!derivative) {
                      exp(x) / sum(exp(x))
                    } else {
                      y <- exp(x) / sum(exp(x))
-                     y * (1 - y)
+                     diag(y) - tcrossprod(y, y)
+                   }
+                 },
+                 "tanh" = function(x, derivative = FALSE) {
+                   if (!derivative) {
+                     tanh(x)
+                   } else {
+                     cosh(x)^-2
                    }
                  })
         })
@@ -31,7 +38,7 @@ mlp <- function(n, activation = "relu", seed = NULL) {
   w <- list()
   if (!is.null(seed)) set.seed(seed)
   for (l in seq_len(length(n) - 1)) {
-    w[[l]] <- matrix(rnorm(n[l + 1] * (n[l] + 1), 0, n[l + 1]^-0.5),
+    w[[l]] <- matrix(runif(n[l + 1] * (n[l] + 1), 0, 1),
                      nrow = n[l + 1],
                      ncol = n[l] + 1)
   }
@@ -57,7 +64,7 @@ cost <- function(model, training_set) {
         a[[l]] <- w[[l]] %*% c(1, z[[l - 1]])
         z[[l]] <- h[[l]](a[[l]])
       }
-      sum(0.5 * (x$output - z[[L]])^2)
+      sum(0.5 * (z[[L]] - x$output)^2)
     },
     w = model$weights,
     h = model$activations)
@@ -152,15 +159,12 @@ train_sgd <- function(model, training_set, batch_size) {
   loss <- 1
   tol <- 1
   m <- 2
-  nu <- 0.05 * c(1 * rep(sqrt(784), 785 * 16),
-                 4 * rep(sqrt(16), 17 * 16),
-                 6 * rep(sqrt(16), 17 * 10))
   while (loss > 1e-2 && tol > 1e-4) {
     model <- vec2model(params, model)
     data <- training_set[sample(n, batch_size), drop = FALSE]
     prev_params <- params
-    params <- params - del_cost(model, data)
-     + 0.0 * (params - prev_params)
+    params <- params - (1 / log(m)) * del_cost(model, data)
+    + 0.5 * (1 / log(m)) * (params - prev_params)
     print(loss <- cost(model, data))
     tol <- norm(params - prev_params, type = "2") /
       max(norm(params, type = "2"), norm(prev_params, type = "2"))
@@ -171,7 +175,7 @@ train_sgd <- function(model, training_set, batch_size) {
   return(model)
 }
 
-test <- function(model, test_set) {
+predict <- function(model, test_set) {
   samples <- sapply(test_set,
     function(x, w, h) {
       L <- length(w)
@@ -183,7 +187,7 @@ test <- function(model, test_set) {
         a[[l]] <- w[[l]] %*% c(1, z[[l - 1]])
         z[[l]] <- h[[l]](a[[l]])
       }
-      return(z[[L]])
+      return(which(z[[L]] >= max(z[[L]])) - 1)
     },
     w = model$weights,
     h = model$activations)
